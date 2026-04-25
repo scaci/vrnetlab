@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+
+import datetime
+import logging
+import os
+import re
+import signal
+import subprocess
+import sys
+import uuid
+
+import vrnetlab
+from passlib.hash import sha512_crypt
+
+# loadable startup config
+STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
+
+
+def handle_SIGCHLD(signal, frame):
+    os.waitpid(-1, os.WNOHANG)
+
+
+def handle_SIGTERM(signal, frame):
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, handle_SIGTERM)
+signal.signal(signal.SIGTERM, handle_SIGTERM)
+signal.signal(signal.SIGCHLD, handle_SIGCHLD)
+
+TRACE_LEVEL_NUM = 9
+logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
+
+
+def trace(self, message, *args, **kws):
+    # Yes, logger takes its '*args' as 'args'.
+    if self.isEnabledFor(TRACE_LEVEL_NUM):
+        self._log(TRACE_LEVEL_NUM, message, args, **kws)
+
+
+logging.Logger.trace = trace
+
+
+class VJUNOSEVOLVED_vm(vrnetlab.VM):
+    def __init__(self, hostname, username, password, conn_mode):
+        for e in os.listdir("/"):
+            if re.search(".qcow2$", e):
+                disk_image = "/" + e
+        super(VJUNOSEVOLVED_vm, self).__init__(
+            username,
+            password,
+            disk_image=disk_image,
+            ram=8192,
+            driveif="virtio",
+            cpu="host",
+            smp="4,sockets=1,cores=4,threads=1",
+            mgmt_passthrough=False,
+        )
+
+        # device hostname
+        self.hostname = hostname
+        # create SHA-512 hash of the password
+        password_hash = sha512_crypt.hash("admin@123")
+
+        # read init.conf configuration file to replace hostname placehodler
+        # with given hostname
+        with open("init.conf", "r") as file:
+            cfg = file.read()
+
+        cfg = cfg.replace("{MGMT_IP_IPV4}", self.mgmt_address_ipv4)
+        cfg = cfg.replace("{MGMT_GW_IPV4}", self.mgmt_gw_ipv4)
+        cfg = cfg.replace("{MGMT_IP_IPV6}", self.mgmt_address_ipv6)
+        cfg = cfg.replace("{MGMT_GW_IPV6}", self.mgmt_gw_ipv6)
+        cfg = cfg.replace("{HOSTNAME}", self.hostname)
+        # replace CRYPT_PSWD file var with nodes given password
+        # (Evo does not accept plaintext passwords in config)
+        cfg = cfg.replace("{CRYPT_PSWD}", password_hash)
+
+        # write changes to init.conf file
+        with open("init.conf", "w") as file:
+            file.write(cfg)
+
+        # pass in user startup config
+        self.startup_config()
+
+        # these QEMU cmd line args are translated from the shipped libvirt XML file
+        self.qemu_args.extend(["-overcommit", "mem-lock=off"])
+        # generate UUID to attach
+        self.qemu_args.extend(["-uuid", str(uuid.uuid4())])
+
+        # extend QEMU args with device USB details, xhci is the most virtualisation-friendly
+        self.qemu_args.extend(["-device", "qemu-xhci,id=usb,bus=pci.0,addr=0x1.0x2"])
+
+        # mount config disk with juniper.conf base configs
+        self.qemu_args.extend(
+            [
+                "-drive",
+                "file=/config.img,format=raw,if=none,id=config_disk",
+                "-device",
+                "usb-storage,bus=usb.0,port=1,drive=config_disk,id=usb-disk0,removable=off,write-cache=on",
+            ]
+        )
+
+        self.qemu_args.extend(["-no-user-config", "-nodefaults", "-boot", "strict=on"])
+        self.nic_type = "virtio-net-pci"
+        self.num_nics = 17
+        self.hostname = hostname
+        self.smbios = [
+            "type=0,vendor=Bochs,version=Bochs",
+            "type=3,manufacturer=Bochs",
+        ]
+
+        # BT chipset
+        evo_model_smbios = "type=1,manufacturer=Bochs,product=Bochs,serial=chassis_no=0:slot=0:type=1:assembly_id=0x0D20:platform=251:master=0:channelized=no"
+        if "BX" in disk_image:
+            # BX chipset
+            evo_model_smbios = "type=1,manufacturer=Bochs,product=Bochs,serial=chassis_no=0:slot=0:type=1:assembly_id=0x0DA9:platform=272:master=0:channelized=no"
+        self.smbios.append(evo_model_smbios)
+
+        junos_version = str(re.search(r"(\d{2}\.\d{1})R\d{1}", disk_image).group(1))
+        try:
+            parsed_junos_version = float(junos_version)
+        except ValueError as e:
+             self.logger.error(f"Could not parse Junos version from filename {disk_image}! Expecting '12.3R4' style versioning to be present: {e}")
+
+        if parsed_junos_version is not None and parsed_junos_version >= 24.2:
+            # vJunosEvolved 24.2R1 and up require UEFI
+            self.qemu_args.extend(["-bios", "/usr/share/qemu/OVMF.fd"])           
+        
+        self.conn_mode = conn_mode
+
+    def startup_config(self):
+        """Load additional config provided by user and append initial
+        configurations set by vrnetlab."""
+        # if startup cfg DNE
+        if not os.path.exists(STARTUP_CONFIG_FILE):
+            self.logger.trace(f"Startup config file {STARTUP_CONFIG_FILE} is not found")
+            # rename init.conf to juniper.conf, this is our startup config
+            os.rename("init.conf", "juniper.conf")
+
+        # if startup cfg file is found
+        else:
+            self.logger.trace(
+                f"Startup config file {STARTUP_CONFIG_FILE} found, appending initial configuration"
+            )
+            # append startup cfg to inital configuration
+            append_cfg = f"cat init.conf {STARTUP_CONFIG_FILE} >> juniper.conf"
+            subprocess.run(append_cfg, shell=True)
+
+        # generate mountable config disk based on juniper.conf file with base vrnetlab configs
+        subprocess.run(["./make-config.sh", "juniper.conf", "config.img"], check=True)
+
+    def bootstrap_spin(self):
+        """EVO-safe bootstrap logic (fixed for vJunosEvolved 23+/25+)"""
+    
+        if self.spins > 600:
+            # give up after longer time for EVO images
+            self.logger.warning("Too many spins, restarting VM")
+            self.stop()
+            self.start()
+            return
+    
+        # NOTE: increased timeout from 1s → 10s (critical fix)
+        try:
+            (ridx, match, res) = self.tn.expect(
+                [
+                    b"login:",
+                    b"Password:",
+                    b"Juniper",
+                    b"localhost login",
+                ],
+                10,
+            )
+        except Exception as e:
+            self.logger.trace(f"expect error: {e}")
+            self.spins += 1
+            return
+    
+        # VALID BOOT DETECTION
+        if match:
+            if ridx in [0, 1, 3]:  # login/password prompts
+                self.logger.info("VM boot prompt detected (EVO-safe)")
+    
+                # try login probe
+                self.wait_write("\r", None)
+    
+                try:
+                    _, loginMatch, _ = self.tn.expect(
+                        [
+                            b"login:",
+                            b"Password:",
+                            f"{self.hostname} login:".encode(),
+                        ],
+                        10,
+                    )
+                except Exception:
+                    loginMatch = False
+    
+                if loginMatch:
+                    self.logger.info("Login prompt confirmed")
+    
+                    self.tn.close()
+    
+                    startup_time = datetime.datetime.now() - self.start_time
+                    self.logger.info(f"Startup complete in: {startup_time}")
+    
+                    self.running = True
+                    return
+    
+            elif ridx == 2:  # "Juniper"
+                self.logger.info("Juniper banner detected (legacy path)")
+    
+        # TRACE OUTPUT (unchanged but useful)
+        if res != b"":
+            self.logger.trace("OUTPUT: %s" % res.decode("utf-8", errors="ignore"))
+            self.spins = 0
+    
+        self.spins += 1
+        return
+
+class VJUNOSEVOLVED(vrnetlab.VR):
+    def __init__(self, hostname, username, password, conn_mode):
+        super(VJUNOSEVOLVED, self).__init__(username, password)
+        self.vms = [VJUNOSEVOLVED_vm(hostname, username, password, conn_mode)]
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument(
+        "--trace", action="store_true", help="enable trace level logging"
+    )
+    parser.add_argument(
+        "--hostname", default="vr-vjunosevolved", help="vJunosEvolved hostname"
+    )
+    parser.add_argument("--username", default="vrnetlab", help="Username")
+    parser.add_argument("--password", default="VR-netlab9", help="Password")
+    parser.add_argument(
+        "--connection-mode", default="tc", help="Connection mode to use in the datapath"
+    )
+    args = parser.parse_args()
+
+    LOG_FORMAT = "%(asctime)s: %(module)-10s %(levelname)-8s %(message)s"
+    logging.basicConfig(format=LOG_FORMAT)
+    logger = logging.getLogger()
+
+    logger.setLevel(logging.DEBUG)
+    if args.trace:
+        logger.setLevel(1)
+
+    vr = VJUNOSEVOLVED(
+        args.hostname,
+        args.username,
+        args.password,
+        conn_mode=args.connection_mode,
+    )
+    vr.start()
