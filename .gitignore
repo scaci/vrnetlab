@@ -27,3 +27,4 @@ cisco*.bin
 
 # ignore clab- dirs
 clab-*
+.codex

@@ -37,6 +37,7 @@ BRIDGE_ADDR = "172.31.255.29"
 ROS_MGMT_ADDR = "172.31.255.30"
 PREFIX_LENGTH = "30"
 CONFIG_FILE = "/ftpboot/config.auto.rsc"
+PERSIST_DIR = "/persist"
 
 
 def trace(self, message, *args, **kws):
@@ -46,6 +47,51 @@ def trace(self, message, *args, **kws):
 
 
 logging.Logger.trace = trace
+
+
+def overlay_image_for(disk_image):
+    return re.sub(r"(\.[^.]+$)", r"-overlay\1", disk_image)
+
+
+def prepare_persistent_overlay(vm, disk_image):
+    """Use /persist for the RouterOS writable overlay when mounted."""
+    if not os.path.isdir(PERSIST_DIR):
+        vm.logger.warning("/persist not mounted; RouterOS overlay remains ephemeral")
+        return
+
+    os.makedirs(PERSIST_DIR, exist_ok=True)
+    overlay_img = overlay_image_for(disk_image)
+    persistent_overlay = os.path.join(PERSIST_DIR, os.path.basename(overlay_img))
+
+    if not os.path.exists(persistent_overlay):
+        if os.path.exists(overlay_img):
+            vrnetlab.run_command(["mv", overlay_img, persistent_overlay])
+            vm.logger.info("Moved RouterOS overlay to %s", persistent_overlay)
+        else:
+            vrnetlab.run_command([
+                "qemu-img", "create",
+                "-f", "qcow2",
+                "-F", vm._overlay_disk_image_format(),
+                "-b", disk_image,
+                persistent_overlay,
+            ])
+            vm.logger.info("Created RouterOS overlay at %s", persistent_overlay)
+
+    if os.path.exists(overlay_img) and not os.path.islink(overlay_img):
+        os.remove(overlay_img)
+    if not os.path.islink(overlay_img) or os.readlink(overlay_img) != persistent_overlay:
+        if os.path.islink(overlay_img):
+            os.remove(overlay_img)
+        os.symlink(persistent_overlay, overlay_img)
+
+    for idx, arg in enumerate(vm.qemu_args):
+        if f"file={overlay_img}" in arg:
+            vm.qemu_args[idx] = arg.replace(
+                f"file={overlay_img}",
+                f"file={persistent_overlay}",
+            )
+            vm.logger.info("RouterOS persistence enabled via %s", persistent_overlay)
+            break
 
 
 class ROS_vm(vrnetlab.VM):
@@ -71,6 +117,7 @@ class ROS_vm(vrnetlab.VM):
         extra_args = {} if platform.machine() == "x86_64" and os.path.exists("/dev/kvm") else {"cpu": cpu_type}
 
         super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=ram_size, driveif="virtio", arch=arch, **extra_args)
+        prepare_persistent_overlay(self, disk_image)
         if self.arch != "aarch64":
             self.qemu_args.extend(["-boot", "n"])
         if self.arch == "aarch64":
