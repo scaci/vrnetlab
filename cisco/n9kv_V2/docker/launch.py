@@ -104,7 +104,7 @@ class N9KV_vm(vrnetlab.VM):
                 "System ready in %s (ridx=%d) - releasing console on port 5000"
                 % (startup_time, ridx)
             )
-            # Chiude la connessione scrapli così la porta 5000 è libera per l'utente
+            # Close the scrapli connection so port 5000 is free for the user
             try:
                 self.scrapli_tn.close()
                 self.logger.info("Serial console released")
