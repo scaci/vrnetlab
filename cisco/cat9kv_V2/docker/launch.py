@@ -87,29 +87,12 @@ class cat9kv_vm(vrnetlab.VM):
         )
 
         self.qemu_args.extend(["-overcommit mem-lock=off"])
-        if self.is_c9800:
-            self._use_virtio_console()
         if self.has_boot_image:
             self.qemu_args.extend([f"-boot order=cd -cdrom /{self.image_name}"])
             # create .img which is mounted for optional startup config and ASIC emulation in 'conf/vswitch.xml' dir.
             self.create_boot_image()
         else:
             self.logger.info("C9800 image without startup config; not attaching bootstrap ISO")
-
-    def _use_virtio_console(self):
-        """Cisco C9800-CL expects a virtio console on KVM."""
-        self.qemu_args = [
-            arg.replace("id=serial0,", "id=c9800console0,")
-            .replace("telnet=on", "telnet=on,mux=on")
-            .replace("chardev:serial0", "chardev:c9800console0")
-            for arg in self.qemu_args
-        ]
-        self.qemu_args.extend([
-            "-device",
-            "virtio-serial-pci,id=virtio-serial0",
-            "-device",
-            "virtconsole,chardev=c9800console0",
-        ])
 
     def create_boot_image(self):
         """Creates an ISO image with optional boot-time files."""
