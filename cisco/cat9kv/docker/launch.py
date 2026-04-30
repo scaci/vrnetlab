@@ -40,6 +40,21 @@ def trace(self, message, *args, **kws):
 logging.Logger.trace = trace
 
 
+def env_int(names, default):
+    """Return the first integer value found in the supplied environment names."""
+    for name in names:
+        value = os.environ.get(name)
+        if value is None:
+            continue
+        match = re.search(r"\d+", str(value))
+        if match:
+            return int(match.group(0))
+        logging.getLogger().warning(
+            "Ignoring %s=%r because it does not contain an integer", name, value
+        )
+    return default
+
+
 class cat9kv_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode, vcpu, ram):
         disk_image = None
@@ -223,8 +238,8 @@ if __name__ == "__main__":
         default="vrxcon",
         help="Connection mode to use in the datapath",
     )
-    parser.add_argument("--vcpu", type=int, default=4, help="Allocated vCPUs")
-    parser.add_argument("--ram", type=int, default=18432, help="Allocaetd RAM in MB")
+    parser.add_argument("--vcpu", type=int, default=None, help="Allocated vCPUs")
+    parser.add_argument("--ram", type=int, default=None, help="Allocated RAM in MB")
 
     args = parser.parse_args()
 
@@ -247,6 +262,32 @@ if __name__ == "__main__":
                 break
         if not args.hostname:
             args.hostname = "cat9kv"
+
+    args.vcpu = args.vcpu or env_int(
+        [
+            "VCPU",
+            "CPU",
+            "QEMU_VCPU",
+            "QEMU_SMP",
+            "CLAB_LABEL_VCPU",
+            "CLAB_LABEL_CPU",
+            "CLAB_LABEL_NODE_VCPU",
+            "CLAB_LABEL_NODE_CPU",
+        ],
+        4,
+    )
+    args.ram = args.ram or env_int(
+        [
+            "RAM",
+            "MEMORY",
+            "QEMU_MEMORY",
+            "CLAB_LABEL_RAM",
+            "CLAB_LABEL_MEMORY",
+            "CLAB_LABEL_NODE_RAM",
+            "CLAB_LABEL_NODE_MEMORY",
+        ],
+        18432,
+    )
 
     vr = cat9kv(
         args.hostname,

@@ -16,59 +16,10 @@ import vrnetlab
 OPENWRT_BASE_IMAGE_RE = re.compile(
     r"openwrt-.*-x86-(?:64-)?(?:generic-)?generic-ext4-combined\.img$"
 )
-PERSIST_DIR = "/persist"
-EPHEMERAL_OVERLAY_DIR = "/overlay"
 
 
 def is_openwrt_base_image(filename):
     return bool(OPENWRT_BASE_IMAGE_RE.match(filename))
-
-
-def overlay_image_for(disk_image):
-    return re.sub(r"(\.[^.]+$)", r"-overlay\1", disk_image)
-
-
-def prepare_persistent_overlay(vm, disk_image):
-    """Move the writable overlay to /persist when a volume is mounted.
-
-    vrnetlab creates the default overlay next to the base image in the
-    container root. That is ephemeral. dNLab bind-mounts /persist for patched
-    images, so keep the overlay there and patch qemu_args to point at it.
-    """
-    overlay_dir = PERSIST_DIR if os.path.isdir(PERSIST_DIR) else EPHEMERAL_OVERLAY_DIR
-    os.makedirs(overlay_dir, exist_ok=True)
-    overlay_img = overlay_image_for(disk_image)
-    overlay_target = os.path.join(overlay_dir, os.path.basename(overlay_img))
-
-    if not os.path.exists(overlay_target):
-        if os.path.exists(overlay_img):
-            shutil.move(overlay_img, overlay_target)
-            vm.logger.info("Moved OpenWrt overlay to %s", overlay_target)
-        else:
-            vrnetlab.run_command([
-                "qemu-img", "create",
-                "-f", "qcow2",
-                "-F", vm._overlay_disk_image_format(),
-                "-b", disk_image,
-                overlay_target,
-            ])
-            vm.logger.info("Created OpenWrt overlay at %s", overlay_target)
-
-    if os.path.exists(overlay_img) and not os.path.islink(overlay_img):
-        os.remove(overlay_img)
-    if not os.path.islink(overlay_img) or os.readlink(overlay_img) != overlay_target:
-        if os.path.islink(overlay_img):
-            os.remove(overlay_img)
-        os.symlink(overlay_target, overlay_img)
-
-    for idx, arg in enumerate(vm.qemu_args):
-        if f"file={overlay_img}" in arg:
-            vm.qemu_args[idx] = arg.replace(f"file={overlay_img}", f"file={overlay_target}")
-    if overlay_dir == PERSIST_DIR:
-        vm.logger.info("OpenWrt persistence enabled via %s", overlay_target)
-    else:
-        vm.logger.warning("/persist not mounted; OpenWrt overlay remains ephemeral")
-    return overlay_dir
 
 
 def handle_SIGCHLD(signal, frame):
@@ -120,7 +71,6 @@ class OpenWRT_vm(vrnetlab.VM):
         super(OpenWRT_vm, self).__init__(
             username, password, disk_image=disk_image, ram=128
         )
-        self.overlay_dir = prepare_persistent_overlay(self, disk_image)
         self.nic_type = "virtio-net-pci"
         self.num_nics = nics
         self.conn_mode = conn_mode
@@ -164,12 +114,13 @@ class OpenWRT_vm(vrnetlab.VM):
                 self.logger.error(f"Failed to flush tc rules for {iface}: {e.stderr}")
 
         self.start()
+        self.spins = 0
 
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""
 
         # Define the overlay directory
-        overlay_dir = self.overlay_dir
+        overlay_dir = "/overlay"
 
         # Ensure the overlay directory exists
         if not os.path.exists(overlay_dir):
@@ -271,20 +222,29 @@ class OpenWRT_vm(vrnetlab.VM):
                 self.vm_stop_start_rm_tc_rules()
                 return
 
-        (ridx, match, res) = self.tn.expect([b"br-lan"], 1)
+        if self.spins and self.spins % 5 == 0:
+            self.tn.write(b"\r\n")
+
+        boot_patterns = [
+            b"br-lan",
+            b"root@OpenWrt",
+            b"root@",
+            b"Please press Enter",
+            b"BusyBox",
+        ]
+        (ridx, match, res) = self.tn.expect(boot_patterns, 1)
         if match:  # got a match!
-            if ridx == 0:  # login
-                self.logger.debug("VM started")
-                # run main config!
-                self.bootstrap_config()
-                # close telnet connection
-                self.tn.close()
-                # startup time?
-                startup_time = datetime.datetime.now() - self.start_time
-                self.logger.info("Startup complete in: %s" % startup_time)
-                # mark as running
-                self.running = True
-                return
+            self.logger.debug("VM started")
+            # run main config!
+            self.bootstrap_config()
+            # close telnet connection
+            self.tn.close()
+            # startup time?
+            startup_time = datetime.datetime.now() - self.start_time
+            self.logger.info("Startup complete in: %s" % startup_time)
+            # mark as running
+            self.running = True
+            return
 
         # no match, if we saw some output from the router it's probably
         # booting, so let's give it some more time
