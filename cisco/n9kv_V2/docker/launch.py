@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import sys
 
 import vrnetlab
@@ -58,10 +59,16 @@ class N9KV_vm(vrnetlab.VM):
         self.conn_mode = conn_mode
         self.num_nics = 129
         self.nic_type = "e1000"
+        self.loader_seen_at = None
 
         self.qemu_args.extend(["-bios", "/OVMF.fd"])
 
         overlay_disk_image = re.sub(r"(\.[^.]+$)", r"-overlay\1", disk_image)
+        if (
+            "if=ide,file={}".format(overlay_disk_image) not in self.qemu_args
+            and os.path.isdir("/persist")
+        ):
+            overlay_disk_image = "/persist/overlay.qcow2"
         self.qemu_args.extend(["-boot", "c"])
         replace_index = self.qemu_args.index(
             "if=ide,file={}".format(overlay_disk_image)
@@ -79,44 +86,111 @@ class N9KV_vm(vrnetlab.VM):
             ]
         )
 
+    def release_console(self):
+        try:
+            self.scrapli_tn.close()
+            self.logger.info("Serial console released")
+        except Exception as e:
+            self.logger.warning("Could not close scrapli_tn: %s" % e)
+
+    def bootstrap_con_expect(self, regex_list, timeout=1):
+        """
+        Read console output with a short socket timeout.
+
+        The default vrnetlab scrapli timeout is intentionally long, but during
+        bootstrap it can keep the launcher attached to port 5000 before the
+        ROMMON fallback timer gets a chance to run.
+        """
+        buf = b""
+        tn_socket = self.scrapli_tn.transport.socket.sock
+        old_socket_timeout = tn_socket.gettimeout()
+        tn_socket.settimeout(0.2)
+        try:
+            t_end = datetime.datetime.now() + datetime.timedelta(seconds=timeout)
+            while datetime.datetime.now() < t_end:
+                try:
+                    buf += self.scrapli_tn.channel.read()
+                except (socket.timeout, TimeoutError):
+                    break
+        finally:
+            tn_socket.settimeout(old_socket_timeout)
+
+        for i, obj in enumerate(regex_list):
+            match = re.search(obj.decode(), buf.decode(errors="ignore"))
+            if match:
+                return i, match, buf
+
+        return -1, None, buf
+
     def bootstrap_spin(self):
         """
         Waits for VDC_ONLINE or POAP syslog messages, then releases the
         serial console (port 5000) so the user can connect and interact
-        with the POAP prompt directly.
+        with the POAP prompt directly. If NX-OS stops in loader/ROMMON,
+        release the console 10 seconds after the loader is detected.
         """
         if self.spins > 300:
             self.stop()
             self.start()
             return
 
-        (ridx, match, res) = self.con_expect(
+        now = datetime.datetime.now()
+        (ridx, match, res) = self.bootstrap_con_expect(
             [
                 b"VDC_MGR-2-VDC_ONLINE",
                 b"POAP-2-POAP_INITED",
                 b"POAP-2-POAP_DISABLED",
-            ]
+                b"Loader Version",
+                b"Trying to load ipxe",
+                b"Trying to read config file",
+                b"Came back to grub",
+            ],
+            1,
         )
 
         if match:
+            if ridx in (3, 4, 5, 6):
+                if self.loader_seen_at is None:
+                    self.loader_seen_at = now
+                    self.logger.warning(
+                        "NX-OS loader/ROMMON detected; will release console "
+                        "if no normal ready/POAP signal arrives within 10 seconds"
+                    )
+                elif (now - self.loader_seen_at).total_seconds() > 10:
+                    self.logger.warning(
+                        "NX-OS loader/ROMMON still present after 10 seconds - "
+                        "releasing console on port 5000"
+                    )
+                    self.release_console()
+                    self.running = True
+                    return
+                self.spins = 0
+                return
+
             startup_time = datetime.datetime.now() - self.start_time
             self.logger.info(
                 "System ready in %s (ridx=%d) - releasing console on port 5000"
                 % (startup_time, ridx)
             )
-            # Close the scrapli connection so port 5000 is free for the user
-            try:
-                self.scrapli_tn.close()
-                self.logger.info("Serial console released")
-            except Exception as e:
-                self.logger.warning("Could not close scrapli_tn: %s" % e)
-
+            self.release_console()
             self.running = True
             return
 
         if res != b"":
             self.write_to_stdout(res)
             self.spins = 0
+
+        if (
+            self.loader_seen_at is not None
+            and (now - self.loader_seen_at).total_seconds() > 10
+        ):
+            self.logger.warning(
+                "NX-OS loader/ROMMON persisted for more than 10 seconds - "
+                "releasing console on port 5000"
+            )
+            self.release_console()
+            self.running = True
+            return
 
         self.spins += 1
 

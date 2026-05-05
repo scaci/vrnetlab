@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import datetime
 import ipaddress
 import logging
@@ -15,7 +14,6 @@ import time
 import uuid
 
 import vrnetlab
-
 
 def handle_SIGCHLD(signal, frame):
     os.waitpid(-1, os.WNOHANG)
@@ -42,14 +40,14 @@ def trace(self, message, *args, **kws):
 logging.Logger.trace = trace
 
 
-class VJUNOSEVOLVED_vm(vrnetlab.VM):
+class VJUNOSROUTER_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
         for e in os.listdir("/"):
             if re.search(".qcow2$", e):
                 disk_image = "/" + e
-        ram = max(512, int(os.getenv("RAM", "8192")))
+        ram = max(512, int(os.getenv("RAM", "5120")))
         vcpu = max(1, int(os.getenv("VCPU", "4")))
-        super(VJUNOSEVOLVED_vm, self).__init__(
+        super(VJUNOSROUTER_vm, self).__init__(
             username,
             password,
             disk_image=disk_image,
@@ -59,7 +57,6 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
             smp=f"{vcpu},sockets=1,cores={vcpu},threads=1",
             mgmt_passthrough=True,
         )
-
         # device hostname
         self.hostname = hostname
 
@@ -104,36 +101,15 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
                 "-drive",
                 "file=/config.img,format=raw,if=none,id=config_disk",
                 "-device",
-                "usb-storage,bus=usb.0,port=1,drive=config_disk,id=usb-disk0,removable=off,write-cache=on",
+                "usb-storage,drive=config_disk,id=usb-disk0,removable=off,write-cache=on",
             ]
         )
 
         self.qemu_args.extend(["-no-user-config", "-nodefaults", "-boot", "strict=on"])
         self.nic_type = "virtio-net-pci"
-        self.num_nics = 17
-        self.hostname = hostname
-        self.smbios = [
-            "type=0,vendor=Bochs,version=Bochs",
-            "type=3,manufacturer=Bochs",
-        ]
-
-        # BT chipset
-        evo_model_smbios = "type=1,manufacturer=Bochs,product=Bochs,serial=chassis_no=0:slot=0:type=1:assembly_id=0x0D20:platform=251:master=0:channelized=no"
-        if "BX" in disk_image:
-            # BX chipset
-            evo_model_smbios = "type=1,manufacturer=Bochs,product=Bochs,serial=chassis_no=0:slot=0:type=1:assembly_id=0x0DA9:platform=272:master=0:channelized=no"
-        self.smbios.append(evo_model_smbios)
-
-        junos_version = str(re.search(r"(\d{2}\.\d{1})R\d{1}", disk_image).group(1))
-        try:
-            parsed_junos_version = float(junos_version)
-        except ValueError as e:
-             self.logger.error(f"Could not parse Junos version from filename {disk_image}! Expecting '12.3R4' style versioning to be present: {e}")
-
-        if parsed_junos_version is not None and parsed_junos_version >= 24.2:
-            # vJunosEvolved 24.2R1 and up require UEFI
-            self.qemu_args.extend(["-bios", "/usr/share/qemu/OVMF.fd"])           
-        
+        # 1 management port + 96 front ports to match vJunosEvolved
+        self.num_nics = 97
+        self.smbios = ["type=1,product=VM-VMX,family=lab"]
         self.conn_mode = conn_mode
 
 
@@ -270,77 +246,53 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
         return bytes(packet) + options
 
     def bootstrap_spin(self):
-        """EVO-safe bootstrap logic (fixed for vJunosEvolved 23+/25+)"""
-    
-        if self.spins > 600:
-            # give up after longer time for EVO images
-            self.logger.warning("Too many spins, restarting VM")
+        """This function should be called periodically to do work."""
+        if self.spins > 300:
+            # too many spins with no result ->  give up
             self.stop()
             self.start()
             return
-    
-        # NOTE: increased timeout from 1s → 10s (critical fix)
-        try:
-            (ridx, match, res) = self.tn.expect(
-                [
-                    b"login:",
-                    b"Password:",
-                    b"Juniper",
-                    b"localhost login",
-                ],
-                10,
-            )
-        except Exception as e:
-            self.logger.trace(f"expect error: {e}")
-            self.spins += 1
-            return
-    
-        # VALID BOOT DETECTION
-        if match:
-            if ridx in [0, 1, 3]:  # login/password prompts
-                self.logger.info("VM boot prompt detected (EVO-safe)")
-    
-                # try login probe
+
+        # lets wait for the OS/platform log to determine if VM is booted,
+        # login prompt can get lost in boot logs
+        (ridx, match, res) = self.tn.expect([b"FreeBSD/amd64"], 1)
+        if match:  # got a match!
+            if ridx == 0:  # login
+                self.logger.info("VM started")
+
+                # Login
                 self.wait_write("\r", None)
-    
-                try:
-                    _, loginMatch, _ = self.tn.expect(
-                        [
-                            b"login:",
-                            b"Password:",
-                            f"{self.hostname} login:".encode(),
-                        ],
-                        10,
-                    )
-                except Exception:
-                    loginMatch = False
-    
+
+                _, loginMatch, _ = self.tn.expect([b"login:"], 1)
                 if loginMatch:
-                    self.logger.info("Login prompt confirmed")
-    
+
+                    self.logger.info("Login prompt found")
+
+                    # close telnet connection
                     self.tn.close()
-    
+                    # startup time?
                     startup_time = datetime.datetime.now() - self.start_time
-                    self.logger.info(f"Startup complete in: {startup_time}")
-    
+                    self.logger.info("Startup complete in: %s" % startup_time)
+                    # mark as running
                     self.running = True
                     return
-    
-            elif ridx == 2:  # "Juniper"
-                self.logger.info("Juniper banner detected (legacy path)")
-    
-        # TRACE OUTPUT (unchanged but useful)
+
+        # no match, if we saw some output from the router it's probably
+        # booting, so let's give it some more time
         if res != b"":
-            self.logger.trace("OUTPUT: %s" % res.decode("utf-8", errors="ignore"))
+            self.logger.trace("OUTPUT: %s" % res.decode())
+            # reset spins if we saw some output
             self.spins = 0
-    
+
         self.spins += 1
+
         return
 
-class VJUNOSEVOLVED(vrnetlab.VR):
+
+class VJUNOSROUTER(vrnetlab.VR):
     def __init__(self, hostname, username, password, conn_mode):
-        super(VJUNOSEVOLVED, self).__init__(username, password)
-        self.vms = [VJUNOSEVOLVED_vm(hostname, username, password, conn_mode)]
+        super(VJUNOSROUTER, self).__init__(username, password)
+        self.vms = [VJUNOSROUTER_vm(hostname, username, password, conn_mode)]
 
 
 if __name__ == "__main__":
@@ -351,7 +303,7 @@ if __name__ == "__main__":
         "--trace", action="store_true", help="enable trace level logging"
     )
     parser.add_argument(
-        "--hostname", default="vr-vjunosevolved", help="vJunosEvolved hostname"
+        "--hostname", default="vr-VJUNOSROUTER", help="vJunos-router hostname"
     )
     parser.add_argument("--username", default="vrnetlab", help="Username")
     parser.add_argument("--password", default="VR-netlab9", help="Password")
@@ -368,7 +320,7 @@ if __name__ == "__main__":
     if args.trace:
         logger.setLevel(1)
 
-    vr = VJUNOSEVOLVED(
+    vr = VJUNOSROUTER(
         args.hostname,
         args.username,
         args.password,
