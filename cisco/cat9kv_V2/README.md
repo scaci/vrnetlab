@@ -84,13 +84,20 @@ When generating `vswitch.xml`, include `prod_serial_number` for Catalyst 9000V A
 
 ### Interface naming
 
-Currently a maximum of 8 data-plane interfaces are supported. 9 interfaces total if including the management interface.
+For Catalyst 9000v images, a maximum of 8 data-plane interfaces are supported. 9 interfaces total if including the management interface.
 
 - `eth0` - Node management interface
 - `eth1` - First dataplane interface (GigabitEthernet1/0/1).
 - `ethX` - Subsequent dataplane interfaces will count onwards from 1. For example, the third dataplane interface will be `eth3`
 
 You can also use interface aliases of `GigabitEthernet1/0/x` or `Gi1/0/x`
+
+For C9800-CL V2 images, the VM exposes three GigabitEthernet interfaces.
+IOS-XE 17.15.05 enumerates them from `GigabitEthernet2`:
+
+- `eth1` - `GigabitEthernet2`
+- `eth2` - `GigabitEthernet3`
+- `eth3` - `GigabitEthernet4`
 
 ### Environment Variables
 

@@ -274,9 +274,11 @@ class OpenWRT_vm(vrnetlab.VM):
     def _mgmt_ipv4_interface(self):
         return ipaddress.IPv4Interface(self.mgmt_address_ipv4)
 
-    def _mgmt_ipv4_cidr(self):
-        iface = self._mgmt_ipv4_interface()
-        return f"{iface.ip}/{iface.network.prefixlen}"
+    def _mgmt_ipv4_address(self):
+        return str(self._mgmt_ipv4_interface().ip)
+
+    def _mgmt_ipv4_netmask(self):
+        return str(self._mgmt_ipv4_interface().netmask)
 
     def _mgmt_ipv6_or_none(self):
         value = getattr(self, "mgmt_address_ipv6", None)
@@ -307,7 +309,8 @@ class OpenWRT_vm(vrnetlab.VM):
         """Check and configure the mgmt interface if needed"""
         self.get_ready()
         changes_network = 0
-        expected_mgmt_address_ipv4 = self._mgmt_ipv4_cidr()
+        expected_mgmt_address_ipv4 = self._mgmt_ipv4_address()
+        expected_mgmt_netmask = self._mgmt_ipv4_netmask()
 
         if "config interface 'mgmt'" not in output:
             self.logger.info("❌ MGMT Interface not found, creating it...")
@@ -328,7 +331,11 @@ class OpenWRT_vm(vrnetlab.VM):
                 )
             )
             time.sleep(0.5)
-            self.tn.write(b"uci -q del network.mgmt.netmask\n")
+            self.tn.write(
+                f"uci set network.mgmt.netmask='{expected_mgmt_netmask}'\n".encode(
+                    "utf-8"
+                )
+            )
             time.sleep(0.5)
             # MGMT passthrough may provide IPv6; never write ip6addr=None.
             self._write_mgmt_ipv6_config(
@@ -360,7 +367,7 @@ class OpenWRT_vm(vrnetlab.VM):
                     f"✅ MGMT IP is already correct: {current_mgmt_address_ipv4}"
                 )
                 if (
-                    "option netmask" in output
+                    f"option netmask '{expected_mgmt_netmask}'" not in output
                     or "option ip6addr 'None'" in output
                     or "option ip6addr None" in output
                     or (
@@ -369,7 +376,11 @@ class OpenWRT_vm(vrnetlab.VM):
                     )
                 ):
                     changes_network = 1
-                self.tn.write(b"uci -q del network.mgmt.netmask\n")
+                self.tn.write(
+                    f"uci set network.mgmt.netmask='{expected_mgmt_netmask}'\n".encode(
+                        "utf-8"
+                    )
+                )
                 time.sleep(0.5)
                 self._write_mgmt_ipv6_config(
                     self.mgmt_passthrough_ipv4_address == self.mgmt_address_ipv4
@@ -392,7 +403,11 @@ class OpenWRT_vm(vrnetlab.VM):
                     )
                 )
                 time.sleep(0.5)
-                self.tn.write(b"uci -q del network.mgmt.netmask\n")
+                self.tn.write(
+                    f"uci set network.mgmt.netmask='{expected_mgmt_netmask}'\n".encode(
+                        "utf-8"
+                    )
+                )
                 time.sleep(0.5)
                 # MGMT passthrough may provide IPv6; never write ip6addr=None.
                 self._write_mgmt_ipv6_config(

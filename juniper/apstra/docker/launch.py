@@ -73,6 +73,16 @@ logging.Logger.trace = trace
 
 # Default RAM in MB.  Apstra minimum is 16 GB.
 DEFAULT_RAM_MB = 16384
+DEFAULT_VCPU = 4
+
+
+def env_int(name, default, minimum=1):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
+
 
 # How long (seconds) to wait for the VM to reach a login prompt.
 # 600 s (10 min) covers even the slowest first-boot database init.
@@ -100,11 +110,15 @@ class Apstra_vm(vrnetlab.VM):
         # ── initialise the vrnetlab base VM ───────────────────────────────────
         # super().__init__() sets up self.logger, self.qemu_args, and all
         # other base attributes.  Nothing on self must be accessed before this.
+        ram_mb = env_int("RAM", DEFAULT_RAM_MB, minimum=DEFAULT_RAM_MB)
+        vcpu = env_int("VCPU", DEFAULT_VCPU, minimum=1)
         super(Apstra_vm, self).__init__(
             username,
             password,
             disk_image=disk_image,
-            ram=DEFAULT_RAM_MB,
+            ram=ram_mb,
+            cpu="host",
+            smp=f"{vcpu},sockets=1,cores={vcpu},threads=1",
         )
 
         # ── Apstra-specific settings (all after super().__init__()) ───────────

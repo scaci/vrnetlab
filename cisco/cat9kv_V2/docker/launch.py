@@ -63,7 +63,9 @@ class cat9kv_vm(vrnetlab.VM):
             if not disk_image and re.search(".qcow2$", e):
                 disk_image = "/" + e
         self.is_c9800 = bool(disk_image and re.search(r"c9800", disk_image, re.IGNORECASE))
-        min_dp_nics = 2 if self.is_c9800 else 8
+        # dnlab-patched: c9800cl-v2-nic-map-v2
+        min_dp_nics = 3 if self.is_c9800 else 8
+        max_dp_nics = 3 if self.is_c9800 else 9
 
         super().__init__(
             username,
@@ -76,7 +78,7 @@ class cat9kv_vm(vrnetlab.VM):
         )
         self.hostname = hostname
         self.conn_mode = conn_mode
-        self.num_nics = 3 if self.is_c9800 else 9
+        self.num_nics = max_dp_nics
         self.nic_type = "virtio-net-pci"
 
         self.image_name = "config.img"
@@ -93,6 +95,12 @@ class cat9kv_vm(vrnetlab.VM):
             self.create_boot_image()
         else:
             self.logger.info("C9800 image without startup config; not attaching bootstrap ISO")
+
+    def gen_mgmt(self):
+        if self.is_c9800:
+            self.logger.info("C9800 image: not creating a separate QEMU mgmt NIC")
+            return []
+        return super().gen_mgmt()
 
     def create_boot_image(self):
         """Creates an ISO image with optional boot-time files."""
