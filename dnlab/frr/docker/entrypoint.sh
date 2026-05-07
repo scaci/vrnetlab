@@ -2,6 +2,7 @@
 set -euo pipefail
 
 install -d -o frr -g frr -m 0750 /var/run/frr /var/log/frr
+rm -rf /var/tmp/frr/watchfrr.* 2>/dev/null || true
 
 dnlab_apply_router_sysctls() {
   local keys=(
@@ -60,6 +61,29 @@ dnlab_prepare_persistent_frr() {
 }
 
 dnlab_prepare_persistent_frr
+
+dnlab_ensure_daemon_setting() {
+  local daemon=$1
+  local value=$2
+  local file=/etc/frr/daemons
+
+  if grep -Eq "^[[:space:]]*${daemon}=" "$file"; then
+    sed -i -E "s|^[[:space:]]*${daemon}=.*|${daemon}=${value}|" "$file"
+  else
+    printf '%s=%s\n' "$daemon" "$value" >> "$file"
+  fi
+}
+
+dnlab_normalize_daemons() {
+  local file=/etc/frr/daemons
+  [[ -f "$file" ]] || : > "$file"
+
+  dnlab_ensure_daemon_setting zebra yes
+  dnlab_ensure_daemon_setting staticd yes
+  dnlab_ensure_daemon_setting mgmtd yes
+}
+
+dnlab_normalize_daemons
 
 if [[ -f /etc/frr/daemons ]]; then
   chown frr:frr /etc/frr/daemons
