@@ -4,6 +4,47 @@ set -euo pipefail
 install -d -o frr -g frr -m 0750 /var/run/frr /var/log/frr
 rm -rf /var/tmp/frr/watchfrr.* 2>/dev/null || true
 
+dnlab_prepare_mgmt_vrf() {
+  local vrf_name=${DNLAB_MGMT_VRF_NAME:-mgmt}
+  local table_id=${DNLAB_MGMT_VRF_TABLE:-1001}
+
+  if ! ip link show dev eth0 >/dev/null 2>&1; then
+    return
+  fi
+
+  local ipv4_defaults=()
+  local ipv6_defaults=()
+  mapfile -t ipv4_defaults < <(ip -4 route show default dev eth0 2>/dev/null || true)
+  mapfile -t ipv6_defaults < <(ip -6 route show default dev eth0 2>/dev/null || true)
+
+  if ! ip link show dev "$vrf_name" >/dev/null 2>&1; then
+    ip link add "$vrf_name" type vrf table "$table_id"
+  fi
+  ip link set dev "$vrf_name" up
+
+  local route
+  for route in "${ipv4_defaults[@]}"; do
+    [[ -n "$route" ]] && ip -4 route del $route 2>/dev/null || true
+  done
+  for route in "${ipv6_defaults[@]}"; do
+    [[ -n "$route" ]] && ip -6 route del $route 2>/dev/null || true
+  done
+
+  if [[ "$(basename "$(readlink -f /sys/class/net/eth0/master 2>/dev/null || true)")" != "$vrf_name" ]]; then
+    ip link set dev eth0 master "$vrf_name"
+  fi
+  ip link set dev eth0 up
+
+  for route in "${ipv4_defaults[@]}"; do
+    [[ -n "$route" ]] && ip -4 route replace vrf "$vrf_name" $route 2>/dev/null || true
+  done
+  for route in "${ipv6_defaults[@]}"; do
+    [[ -n "$route" ]] && ip -6 route replace vrf "$vrf_name" $route 2>/dev/null || true
+  done
+}
+
+dnlab_prepare_mgmt_vrf
+
 dnlab_apply_router_sysctls() {
   local keys=(
     net.ipv4.ip_forward=1
@@ -51,10 +92,11 @@ dnlab_prepare_persistent_frr() {
         : > "$dst"
       fi
     fi
-
-    rm -f "$src"
-    ln -s "$dst" "$src"
   done
+
+  if ! awk '$5 == "/etc/frr" { found = 1 } END { exit !found }' /proc/self/mountinfo; then
+    mount --bind "$persist_frr" /etc/frr
+  fi
 
   chown -R frr:frr "$persist_frr" 2>/dev/null || true
   chmod 0640 "$persist_frr"/daemons "$persist_frr"/frr.conf "$persist_frr"/vtysh.conf 2>/dev/null || true

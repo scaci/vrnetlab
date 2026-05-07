@@ -26,8 +26,11 @@ mgmtd=yes
 Protocol daemons are intentionally disabled by default and are expected to be
 enabled per node by DNLab GUI node features.
 
-The image is DNLab-native: when `/persist` is mounted, FRR configuration files
-under `/etc/frr` are symlinked to `/persist/frr`.
+The image is DNLab-native: when `/persist` is mounted, `/persist/frr` is
+bind-mounted over `/etc/frr`. This keeps FRR's atomic configuration writes
+inside the persistent directory.
 
 In containerlab this image must be deployed as `kind: linux`; `eth0` remains
-the management interface managed by containerlab's management network.
+the management interface managed by containerlab's management network. At
+startup, `eth0` is moved into a Linux VRF named `mgmt` with its own routing
+table so management routing stays separate from the router dataplane.

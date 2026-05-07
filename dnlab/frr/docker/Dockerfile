@@ -15,6 +15,7 @@ RUN apt-get update -qy \
       iputils-ping \
       less \
       lsb-release \
+      mount \
       procps \
       tcpdump \
       telnet \
