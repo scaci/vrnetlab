@@ -16,6 +16,8 @@ RUN apt-get update -qy \
       less \
       lsb-release \
       mount \
+      inetutils-inetd \
+      inetutils-telnetd \
       procps \
       tcpdump \
       telnet \
@@ -34,13 +36,14 @@ RUN apt-get update -qy \
 
 COPY daemons /etc/frr/daemons
 COPY frr.conf /etc/frr/frr.conf
+COPY console-inetd.conf /etc/dnlab-console-inetd.conf
 COPY entrypoint.sh /usr/local/sbin/dnlab-frr-entrypoint
 
 RUN chmod 0640 /etc/frr/daemons /etc/frr/frr.conf \
     && chown frr:frr /etc/frr/daemons /etc/frr/frr.conf \
     && chmod 0755 /usr/local/sbin/dnlab-frr-entrypoint
 
-EXPOSE 2601 2602 2603 2604 2605 2606 2607 2608 2609 2610 2611 2612 2613 2614 2615 2616 2617 2618
+EXPOSE 2601 2602 2603 2604 2605 2606 2607 2608 2609 2610 2611 2612 2613 2614 2615 2616 2617 2618 5000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/sbin/dnlab-frr-entrypoint"]
 CMD []

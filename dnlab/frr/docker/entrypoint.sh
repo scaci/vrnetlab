@@ -46,10 +46,14 @@ dnlab_prepare_mgmt_vrf() {
 dnlab_prepare_mgmt_vrf
 
 dnlab_apply_router_sysctls() {
+  # tcp_l3mdev_accept lets a global TCP listener (e.g. the console-proxy
+  # on :5000) accept connections from any VRF, so the jumphost can reach
+  # vtysh even though eth0 is enslaved to the mgmt VRF below.
   local keys=(
     net.ipv4.ip_forward=1
     net.ipv4.conf.all.forwarding=1
     net.ipv4.conf.default.forwarding=1
+    net.ipv4.tcp_l3mdev_accept=1
     net.ipv6.conf.all.forwarding=1
     net.ipv6.conf.default.forwarding=1
     net.ipv6.conf.all.keep_addr_on_down=1
@@ -126,6 +130,22 @@ dnlab_normalize_daemons() {
 }
 
 dnlab_normalize_daemons
+
+dnlab_start_console_inetd() {
+  # vrnetlab/clab convention: serial console on TCP/5000. FRR is native,
+  # so there is no QEMU exposing a chardev=telnet; we run a real telnet
+  # server (inetutils-telnetd via inetutils-inetd) that handles the
+  # IAC negotiation and allocates a pty for vtysh. This is what the
+  # jumphost's `vd connect` (which uses /usr/bin/telnet) expects on the
+  # other end of the wire, the same way it expects to find QEMU on the
+  # vrnetlab images.
+  if [[ ! -x /usr/sbin/inetutils-inetd ]]; then
+    return
+  fi
+  /usr/sbin/inetutils-inetd /etc/dnlab-console-inetd.conf
+}
+
+dnlab_start_console_inetd
 
 if [[ -f /etc/frr/daemons ]]; then
   chown frr:frr /etc/frr/daemons
