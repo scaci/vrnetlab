@@ -98,14 +98,17 @@ class VIOS_vm(vrnetlab.VM):
             self.start()
             return
 
-        # Expect different prompt based on device type
+        # IOSv can present either the default prompt (Switch>/Router>) or a
+        # hostname-based user EXEC prompt after loading startup-config.
         device_prompt = b"Switch>" if self.device_type == "switch" else b"Router>"
+        hostname_prompt = rf"{re.escape(self.hostname)}>".encode()
 
         (ridx, match, res) = self.con_expect(
             [
                 rb"Would you like to enter the initial configuration dialog\? \[yes/no\]:",
-                b"Press RETURN to get started!",
+                rb"Press RETURN to get started[!.]",
                 device_prompt,
+                hostname_prompt,
             ],
         )
 
@@ -117,7 +120,7 @@ class VIOS_vm(vrnetlab.VM):
                 self.logger.info("Entering user EXEC mode")
                 for _ in range(3):
                     self.wait_write("\r", wait=None)
-            elif ridx == 2:
+            elif ridx in (2, 3):
                 self.apply_config()
 
                 # startup time
