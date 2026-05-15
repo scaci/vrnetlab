@@ -63,8 +63,8 @@ class cat9kv_vm(vrnetlab.VM):
             if not disk_image and re.search(".qcow2$", e):
                 disk_image = "/" + e
         self.is_c9800 = bool(disk_image and re.search(r"c9800", disk_image, re.IGNORECASE))
-        # dnlab-patched: c9800cl-v2-nic-map-v2
-        min_dp_nics = 3 if self.is_c9800 else 8
+        # dnlab-patched: c9800cl-v2-nic-map-v4
+        min_dp_nics = 2 if self.is_c9800 else 8
         max_dp_nics = 3 if self.is_c9800 else 9
 
         super().__init__(
@@ -98,8 +98,7 @@ class cat9kv_vm(vrnetlab.VM):
 
     def gen_mgmt(self):
         if self.is_c9800:
-            self.logger.info("C9800 image: not creating a separate QEMU mgmt NIC")
-            return []
+            self.logger.info("C9800 image: creating QEMU mgmt NIC for IOS GigabitEthernet1")
         return super().gen_mgmt()
 
     def create_boot_image(self):
@@ -199,16 +198,17 @@ ip -6 addr flush $TAP_IF || true
         if not self.is_c9800:
             return super().gen_dummy_nics()
 
-        nics = self.min_nics - self.num_provisioned_nics
+        provisioned_slots = max(self.highest_provisioned_nic_num, self.num_provisioned_nics)
+        nics = max(0, self.min_nics - provisioned_slots)
 
         self.logger.debug("Insufficient NICs defined. Generating %s dummy nics", nics)
         self.create_dummy_tap_ifup()
 
         res = []
-        pci_bus_ctr = self.num_provisioned_nics
+        pci_bus_ctr = provisioned_slots
 
         for i in range(0, nics):
-            interface_name = f"dummy{str(i + self.num_provisioned_nics)}"
+            interface_name = f"dummy{str(i + provisioned_slots + 1)}"
             pci_bus_ctr += 1
 
             pci_bus = math.floor(pci_bus_ctr / self.nics_per_pci_bus) + 1
