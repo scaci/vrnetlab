@@ -9,6 +9,7 @@ cisco*.bin
 *.vdi
 *.iso
 *cidfile
+*img.bz2
 
 .DS_Store
 */.DS_Store
