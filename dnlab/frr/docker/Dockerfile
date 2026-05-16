@@ -22,6 +22,7 @@ RUN apt-get update -qy \
       tcpdump \
       telnet \
       tini \
+      traceroute \
       vim-tiny \
     && curl -fsSL https://deb.frrouting.org/frr/keys.gpg \
       -o /usr/share/keyrings/frrouting.gpg \
