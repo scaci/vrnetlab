@@ -40,6 +40,8 @@ COPY frr.conf /etc/frr/frr.conf
 COPY console-inetd.conf /etc/dnlab-console-inetd.conf
 COPY entrypoint.sh /usr/local/sbin/dnlab-frr-entrypoint
 
+RUN echo "hosts: files" > /etc/nsswitch.conf
+
 RUN chmod 0640 /etc/frr/daemons /etc/frr/frr.conf \
     && chown frr:frr /etc/frr/daemons /etc/frr/frr.conf \
     && chmod 0755 /usr/local/sbin/dnlab-frr-entrypoint
