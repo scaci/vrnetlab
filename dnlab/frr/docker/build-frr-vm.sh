@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VERSION=${VERSION:-10.6.1}
-BUILD_REVISION=${BUILD_REVISION:-2}
+BUILD_REVISION=${BUILD_REVISION:-3}
 FRR_SERIES=${FRR_SERIES:-10.6}
 FRR_DEB_VERSION=${FRR_DEB_VERSION:-${VERSION}-0~deb13u1}
 DISK_SIZE_MB=${DISK_SIZE_MB:-4096}
@@ -228,10 +228,10 @@ mkdir -p "${ROOTFS}/etc/systemd/system/serial-getty@ttyS0.service.d"
 cat > "${ROOTFS}/etc/systemd/system/serial-getty@ttyS0.service.d/override.conf" <<'EOF'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin frrvty --noclear %I linux
+ExecStart=-/sbin/agetty --autologin root --noclear %I linux
 EOF
 
-chroot "${ROOTFS}" useradd -r -m -g frrvty -G frr -s /usr/local/sbin/dnlab-frr-console frrvty
+chroot "${ROOTFS}" usermod -s /usr/local/sbin/dnlab-frr-console root
 chroot "${ROOTFS}" systemctl enable dnlab-frr-prepare.service frr.service serial-getty@ttyS0.service
 ln -sf /lib/systemd/systemd "${ROOTFS}/sbin/init"
 
