@@ -5,6 +5,7 @@ TAG_SUFFIX?=-dnlab
 IMAGE_REPOSITORY?=vrnetlab/dnlab_frr
 IMAGE_TAG=$(VERSION)$(TAG_SUFFIX)
 DOCKER_DIR=docker
+DISK_SIZE_MB?=4096
 
 ifdef DOCKER_PLATFORM
 DOCKER_BUILD_CMD=docker buildx build --platform $(DOCKER_PLATFORM)
@@ -12,13 +13,24 @@ else
 DOCKER_BUILD_CMD=docker build
 endif
 
-.PHONY: all build docker-image docker-push version-test usage
+.PHONY: all build docker-image docker-pre-build docker-push version-test usage clean-vm-artifacts
 
 all: docker-image
 
 build: docker-image
 
-docker-image:
+docker-pre-build:
+	@echo "--> Copying vrnetlab common assets"
+	cp ../../common/vrnetlab.py ../../common/healthcheck.py $(DOCKER_DIR)/
+	@echo "--> Preparing DNLab FRR VM disk"
+	docker run --rm \
+		-v $(CURDIR)/$(DOCKER_DIR):/work/docker \
+		-e VERSION=$(VERSION) \
+		-e DISK_SIZE_MB=$(DISK_SIZE_MB) \
+		public.ecr.aws/docker/library/debian:13-slim \
+		/work/docker/build-frr-vm.sh
+
+docker-image: docker-pre-build
 	@echo "Building docker image $(IMAGE_REPOSITORY):$(IMAGE_TAG)"
 	$(DOCKER_BUILD_CMD) \
 		--build-arg FRR_VERSION=$(VERSION) \
@@ -35,10 +47,17 @@ docker-push:
 version-test:
 	@echo Version: $(VERSION)
 	@echo Image: $(IMAGE_REPOSITORY):$(IMAGE_TAG)
+	@echo Disk size MB: $(DISK_SIZE_MB)
+
+clean-vm-artifacts:
+	rm -rf $(DOCKER_DIR)/.frr-vm-build
+	rm -f $(DOCKER_DIR)/installed.qcow2 $(DOCKER_DIR)/vmlinuz $(DOCKER_DIR)/initrd.img
+	rm -f $(DOCKER_DIR)/vrnetlab.py $(DOCKER_DIR)/healthcheck.py $(DOCKER_DIR)/.frr-vm-version
 
 usage:
 	@echo "Usage:"
 	@echo "  make"
 	@echo "  make VERSION=10.6.1"
+	@echo "  make DISK_SIZE_MB=4096"
 	@echo "  make IMAGE_REPOSITORY=vrnetlab/dnlab_frr VERSION=10.6.1"
 	@echo "  make TAG_SUFFIX=        # build a non-dnlab tag intentionally"

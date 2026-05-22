@@ -1,9 +1,10 @@
 # DNLab FRR
 
-Native FRRouting container image built with a vrnetlab-style target layout.
+FRRouting VM-in-container image built with a vrnetlab-style target layout.
 
-The image is based on Debian 13 slim and installs FRR from the official
-FRRouting Debian repository. The default tag is:
+The runtime container is based on Debian 13 slim and starts a QEMU VM that runs
+Debian 13 with FRR from the official FRRouting Debian repository. The default
+tag is:
 
 ```text
 vrnetlab/dnlab_frr:10.6.1-dnlab
@@ -14,6 +15,9 @@ Build:
 ```bash
 make
 ```
+
+The build generates `docker/installed.qcow2`, `docker/vmlinuz`, and
+`docker/initrd.img` automatically; no external FRR qcow2 is required.
 
 Default daemons enabled in `/etc/frr/daemons`:
 
@@ -26,11 +30,11 @@ mgmtd=yes
 Protocol daemons are intentionally disabled by default and are expected to be
 enabled per node by DNLab GUI node features.
 
-The image is DNLab-native: when `/persist` is mounted, `/persist/frr` is
-bind-mounted over `/etc/frr`. This keeps FRR's atomic configuration writes
-inside the persistent directory.
+When `/persist` is mounted, `/persist/frr` is exposed to the guest VM over 9p
+and mounted over `/etc/frr`. This keeps FRR's atomic configuration writes inside
+the persistent directory.
 
-In containerlab this image must be deployed as `kind: linux`; `eth0` remains
-the management interface managed by containerlab's management network. At
-startup, `eth0` is moved into a Linux VRF named `mgmt` with its own routing
-table so management routing stays separate from the router dataplane.
+The image preserves the DNLab GUI-facing deployment contract. The VM uses
+transparent management passthrough, so guest `eth0` receives the container
+management address, and dataplane interfaces remain `eth1+`. The serial console
+is exposed on TCP/5000 and lands in `vtysh`.

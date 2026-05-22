@@ -1,6 +1,8 @@
 .vscode
 .idea
 venv
+__pycache__/
+*.pyc
 *.qcow2
 cisco*.bin
 *.gz
@@ -10,6 +12,10 @@ cisco*.bin
 *.iso
 *cidfile
 *img.bz2
+**/docker/.frr-vm-build/
+**/docker/.frr-vm-version
+**/docker/initrd.img
+**/docker/vmlinuz
 
 .DS_Store
 */.DS_Store
