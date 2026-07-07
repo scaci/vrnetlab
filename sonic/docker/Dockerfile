@@ -1,5 +1,5 @@
 # base image dockerfile is defined in https://github.com/srl-labs/vrnetlab
-FROM ghcr.io/srl-labs/vrnetlab-base:0.3.1
+FROM ghcr.io/srl-labs/vrnetlab-base:0.3.0
 
 ARG DEBIAN_FRONTEND=noninteractive
 # sshpass is used by backup.sh; the base image doesn't ship it.
