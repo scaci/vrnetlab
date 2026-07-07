@@ -183,8 +183,12 @@ class VM:
         will write all channel i/o as DEBUG log level.
         """
         self.scrapli_logger = logging.getLogger("scrapli")
-        
-        scrapli_log_level = logging.DEBUG if os.getenv("DEBUG_SCRAPLI", "false").lower() == "true" else logging.INFO
+
+        scrapli_log_level = (
+            logging.DEBUG
+            if os.getenv("DEBUG_SCRAPLI", "false").lower() == "true"
+            else logging.INFO
+        )
         self.scrapli_logger.setLevel(scrapli_log_level)
 
         # init scrapli_tn -- main telnet device
@@ -323,7 +327,9 @@ class VM:
         snapshot_disk = f"/snapshot-data/vm{self.num}/disk.qcow2"
         snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
         snapshot_metadata = f"/snapshot-data/vm{self.num}/metadata.json"
-        restoring_snapshot = os.path.exists(snapshot_disk) and os.path.exists(snapshot_state)
+        restoring_snapshot = os.path.exists(snapshot_disk) and os.path.exists(
+            snapshot_state
+        )
 
         # Load snapshot metadata if restoring
         self.snapshot_metadata = None
@@ -331,7 +337,7 @@ class VM:
             self.logger.info(f"Restoring from snapshot")
             self.logger.info(f"Snapshot disk: {snapshot_disk}")
             self.logger.info(f"Snapshot state: {snapshot_state}")
-            
+
             if os.path.exists(snapshot_metadata):
                 with open(snapshot_metadata, "r") as f:
                     self.snapshot_metadata = json.load(f)
@@ -341,8 +347,10 @@ class VM:
                 if "secondary_disks" in self.snapshot_metadata:
                     for disk in self.snapshot_metadata["secondary_disks"]:
                         self.logger.info(f"Restoring secondary disk: {disk}")
-                        shutil.copy2(os.path.join(f"/snapshot-data/vm{self.num}", disk), disk)
-            
+                        shutil.copy2(
+                            os.path.join(f"/snapshot-data/vm{self.num}", disk), disk
+                        )
+
             overlay_disk_image = f"/snapshot-data/vm{self.num}/disk-overlay.qcow2"
             base_disk = snapshot_disk
             base_format = "qcow2"
@@ -371,7 +379,11 @@ class VM:
                 ]
             )
 
-        machine = "pc" if self.arch == "x86_64" else "virt,virtualization=on -accel tcg,tb-size=128"
+        machine = (
+            "pc"
+            if self.arch == "x86_64"
+            else "virt,virtualization=on -accel tcg,tb-size=128"
+        )
 
         # Build qemu args
         self.qemu_args = [
@@ -572,7 +584,7 @@ class VM:
         tc qdisc add dev $TAP_IF clsact
         tc filter add dev $TAP_IF ingress flower action mirred egress redirect dev {INTF_PREFIX}$INDEX
         """
-        
+
         ifup_script = ifup_script.replace("{INTF_PREFIX}", self.data_intf_prefix)
 
         with open("/etc/tc-tap-ifup", "w") as f:
@@ -587,7 +599,7 @@ class VM:
         ip link set tap0 mtu 65000
 
         # disable IPv6 to avoid sending periodic traffic like router solicitations from the vrnetlab container
-        ip -6 addr flush $TAP_IF
+        ip -6 addr flush tap0
 
         # create tc eth<->tap redirect rules
 
@@ -650,7 +662,11 @@ class VM:
         res.append("-device")
 
         # If restoring from snapshot, use the saved management MAC address
-        if self.snapshot_metadata and "mac_addresses" in self.snapshot_metadata and len(self.snapshot_metadata["mac_addresses"]) > 0:
+        if (
+            self.snapshot_metadata
+            and "mac_addresses" in self.snapshot_metadata
+            and len(self.snapshot_metadata["mac_addresses"]) > 0
+        ):
             self.mgmt_mac = self.snapshot_metadata["mac_addresses"][0]
             self.logger.info(f"Using saved management MAC: {self.mgmt_mac}")
         else:
@@ -729,7 +745,7 @@ class VM:
 
     def get_intf_mac(self, intf_name: str) -> str:
         """Get the MAC address of a container interface
-        
+
         Returns the MAC address of the specified interface, or None if not found.
         This is used to sync VM NIC MAC addresses with container interface MAC addresses
         for proper macvlan bridge mode operation.
@@ -741,11 +757,13 @@ class VM:
                 if command_json and len(command_json) > 0:
                     mac_address = command_json[0].get("address")
                     if mac_address:
-                        self.logger.debug(f"Found MAC address {mac_address} for interface {intf_name}")
+                        self.logger.debug(
+                            f"Found MAC address {mac_address} for interface {intf_name}"
+                        )
                         return mac_address
         except Exception as e:
             self.logger.debug(f"Could not get MAC address for {intf_name}: {e}")
-        
+
         return None
 
     def nic_provision_delay(self) -> None:
@@ -888,7 +906,9 @@ class VM:
                 intf_name = f"{self.data_intf_prefix}{i}"
                 mac = self.get_intf_mac(intf_name)
                 if mac:
-                    self.logger.info(f"Using container interface MAC {mac} for VM NIC {intf_name}")
+                    self.logger.info(
+                        f"Using container interface MAC {mac} for VM NIC {intf_name}"
+                    )
 
             # otherwise generate the mac
             if not mac:
@@ -1168,15 +1188,15 @@ class VM:
                 "num_nics": self.num_nics,
                 "provision_pci_bus": self.provision_pci_bus,
                 "nics_per_pci_bus": self.nics_per_pci_bus,
-                "secondary_disks": secondary_disks
+                "secondary_disks": secondary_disks,
             }
 
             # Extract MAC addresses from QEMU via "info network" command
             try:
                 response = self._qemu_monitor_cmd("info network", wait=True)
-                
+
                 # Extract MAC addresses using regex pattern
-                mac_pattern = r'macaddr=([0-9a-f:]{17})'
+                mac_pattern = r"macaddr=([0-9a-f:]{17})"
                 macs = re.findall(mac_pattern, response, re.IGNORECASE)
                 metadata["mac_addresses"] = macs
                 self.logger.info(f"Extracted MAC addresses from QEMU: {macs}")
@@ -1191,7 +1211,11 @@ class VM:
             self.logger.info(f"Resuming VM {self.num}")
             self._qemu_monitor_cmd("cont")
 
-            return {"state": state_file, "disk": os.path.join(vm_dir, "disk.qcow2"), "metadata": metadata_file}
+            return {
+                "state": state_file,
+                "disk": os.path.join(vm_dir, "disk.qcow2"),
+                "metadata": metadata_file,
+            }
 
         except Exception as e:
             # Always try to resume
@@ -1310,7 +1334,9 @@ class VR:
             self.mgmt_passthrough = mgmt_passthrough_override.lower() == "true"
 
         # Check if we should restore from snapshot before VMs are created
-        if os.environ.get("RESTORE_SNAPSHOT") == "1" and os.path.exists("/snapshot.tar"):
+        if os.environ.get("RESTORE_SNAPSHOT") == "1" and os.path.exists(
+            "/snapshot.tar"
+        ):
             self.logger.info("Restoring from /snapshot.tar")
             self.snapshot_restore()
 
