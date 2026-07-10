@@ -99,6 +99,9 @@ class VRP_vm(vrnetlab.VM):
             self.start()
             return
 
+        # Nudge the console so the prompt is re-printed if a previous read consumed it.
+        self.tn.write(b"\r\n")
+
         # First check for prompt
         (ridx, match, res) = self.tn.expect([b"<HUAWEI>"], 1)
 
@@ -123,8 +126,8 @@ class VRP_vm(vrnetlab.VM):
                     self.logger.info(f"DEVICE: {line}")
             self.spins = 0  # reset spin counter if we saw anything
 
-        # If prompt matched do config
-        if match and ridx == 0:
+        # If prompt matched (via expect OR drained into full_output) do config
+        if (match and ridx == 0) or (b"<HUAWEI>" in full_output):
             
             # fetch VRP version first
             self.logger.info("Fetching VRP version...")
