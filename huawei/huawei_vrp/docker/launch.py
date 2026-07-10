@@ -159,6 +159,22 @@ class VRP_vm(vrnetlab.VM):
 
         return
 
+    def wait_write(
+        self, cmd, wait="__defaultpattern__", con=None, clean_buffer=False, hold="", timeout=20
+    ):
+        """Bound every VRP console wait with a timeout.
+
+        On VRP V800R023 the device in mmi-mode does not always re-print the ']'
+        prompt (notably after 'clear configuration this' on the mgmt interface),
+        and telnetlib read_until() blocks with no timeout, deadlocking the
+        bootstrap. Defaulting to a finite timeout degrades a missed prompt to a
+        wait-then-proceed (mmi-mode still executes the queued command) instead of
+        a permanent hang.
+        """
+        super().wait_write(
+            cmd, wait=wait, con=con, clean_buffer=clean_buffer, hold=hold, timeout=timeout
+        )
+
     def bootstrap_mgmt_interface(self):
         # wait for system to become ready for configuration
         # otherwise we might see Error: The system is busy in building configuration. Please wait for a moment...
@@ -178,13 +194,14 @@ class VRP_vm(vrnetlab.VM):
         if self.vm_type == "NE40E":
             mgmt_interface = "GigabitEthernet"
         self.wait_write(cmd=f"interface {mgmt_interface} 0/0/0", wait="]")
-        while True:
+        # NOTE: 'clear configuration this' on V800R023 in mmi-mode deadlocks the
+        # bootstrap (the mmi action-command summary stalls the telnet reader and
+        # the worker thread never returns). It is only meant to wipe any default
+        # config off the freshly-booted mgmt interface, which is unnecessary
+        # here, so skip it on NE40E and configure the interface directly.
+        if self.vm_type != "NE40E":
             self.wait_write(cmd="clear configuration this", wait=None)
-            (idx, match, res) = self.tn.expect([rb"Error"], 1)
-            if match and idx == 0:
-                time.sleep(5)
-            else:
-                break
+            self.tn.read_until(b"Error", 3)
         self.wait_write(cmd="undo shutdown", wait=None)
         self.wait_write(cmd="ip binding vpn-instance __MGMT_VPN__", wait="]")
         self.wait_write(cmd=f"ip address {self.mgmt_address_ipv4.replace('/', ' ')}", wait="]")

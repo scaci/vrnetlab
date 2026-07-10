@@ -975,7 +975,7 @@ class VM:
         self.start()
 
     def wait_write(
-        self, cmd, wait="__defaultpattern__", con=None, clean_buffer=False, hold=""
+        self, cmd, wait="__defaultpattern__", con=None, clean_buffer=False, hold="", timeout=None
     ):
         """Wait for something on the serial port and then send command
 
@@ -997,7 +997,7 @@ class VM:
             if wait == "__defaultpattern__":
                 wait = self.wait_pattern
             self.logger.info(f"waiting for '{wait}' on {con_name}")
-            res = con.read_until(wait.encode())
+            res = con.read_until(wait.encode(), timeout)
 
             while hold and (hold in res.decode()):
                 self.logger.info(
@@ -1005,7 +1005,7 @@ class VM:
                 )
                 con.write("\r".encode())
                 time.sleep(10)
-                res = con.read_until(wait.encode())
+                res = con.read_until(wait.encode(), timeout)
 
             cleaned_buf = (
                 (con.read_very_eager()) if clean_buffer else None
