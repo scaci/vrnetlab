@@ -169,6 +169,9 @@ class VRP_vm(vrnetlab.VM):
         self.wait_write(cmd="ip vpn-instance __MGMT_VPN__", wait="]")
         self.wait_write(cmd="ipv4-family", wait="]")
         self.wait_write(cmd="quit", wait="]")
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            self.wait_write(cmd="ipv6-family", wait="]")
+            self.wait_write(cmd="quit", wait="]")
         self.wait_write(cmd="quit", wait="]")
         if self.vm_type == "CE12800":
             mgmt_interface = "MEth"
@@ -185,10 +188,19 @@ class VRP_vm(vrnetlab.VM):
         self.wait_write(cmd="undo shutdown", wait=None)
         self.wait_write(cmd="ip binding vpn-instance __MGMT_VPN__", wait="]")
         self.wait_write(cmd=f"ip address {self.mgmt_address_ipv4.replace('/', ' ')}", wait="]")
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            self.wait_write(cmd="ipv6 enable", wait="]")
+            self.wait_write(
+                cmd=f"ipv6 address {self.mgmt_address_ipv6.replace('/', ' ')}", wait="]"
+            )
         self.wait_write(cmd="quit", wait="]")
         self.wait_write(
             cmd=f"ip route-static vpn-instance __MGMT_VPN__ 0.0.0.0 0 {self.mgmt_gw_ipv4}", wait="]"
         )
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            self.wait_write(
+                cmd=f"ipv6 route-static vpn-instance __MGMT_VPN__ :: 0 {self.mgmt_gw_ipv6}", wait="]"
+            )
 
     def bootstrap_config(self):
         """Do the actual bootstrap config"""
@@ -263,9 +275,11 @@ class VRP_vm(vrnetlab.VM):
         # Enable stelnet, sftp, scp, ssh
         self.wait_write(cmd="stelnet server enable", wait="]")
         self.wait_write(cmd="sftp ipv4 server enable", wait="]")
+        self.wait_write(cmd="sftp ipv6 server enable", wait="]")
         self.wait_write(cmd="scp server enable", wait="]")
         self.wait_write(cmd="ssh authentication-type default password", wait="]")
         self.wait_write(cmd="ssh server-source all-interface", wait="]")
+        self.wait_write(cmd="ssh ipv6 server-source all-interface", wait="]")
         self.wait_write(cmd="sftp server default-directory cfcard:/", wait="]")
 
         # Set some ciphers for compatibility
