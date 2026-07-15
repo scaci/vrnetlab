@@ -11,14 +11,86 @@ Idempotent: re-running the patch is a no-op if the elements already exist.
 
 import argparse
 import ipaddress
+from pathlib import Path
+import re
 import sys
 import xml.etree.ElementTree as ET
 
 CONFIG_PATH = "/conf/config.xml"
+CONFIG_BACKUP_DIR = "/conf/backup"
+HOSTNAME_STATE_PATH = "/conf/.dnlab-hostname"
 DEFAULT_MGMT_IF = "vtnet0"
 DEFAULT_MGMT_ALIAS = "opt9"
 DEFAULT_LAN_IP = "192.168.1.1"
 DEFAULT_LAN_PREFIX = "24"
+DEFAULT_HOSTNAMES = {"opnsense"}
+HOSTNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def valid_hostname(value: str | None) -> str:
+    value = (value or "").strip()
+    return value if HOSTNAME_RE.fullmatch(value) else ""
+
+
+def hostname_from_config(path: Path) -> str:
+    try:
+        return valid_hostname(ET.parse(path).getroot().findtext("./system/hostname"))
+    except (OSError, ET.ParseError):
+        return ""
+
+
+def resolve_hostname(
+    current: str,
+    bootstrap: str,
+    saved: str,
+    backup_dir: Path,
+) -> str:
+    current = valid_hostname(current)
+    bootstrap = valid_hostname(bootstrap)
+    saved = valid_hostname(saved)
+
+    if current and current.lower() not in DEFAULT_HOSTNAMES:
+        return current
+
+    try:
+        backups = sorted(
+            backup_dir.glob("config-*.xml"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        backups = []
+    for backup in backups:
+        candidate = hostname_from_config(backup)
+        if candidate and candidate.lower() not in DEFAULT_HOSTNAMES:
+            return candidate
+
+    return saved or bootstrap or current or "OPNsense"
+
+
+def preserve_hostname(root: ET.Element, bootstrap: str) -> list[str]:
+    system = root.find("./system")
+    if system is None:
+        return []
+    try:
+        saved = Path(HOSTNAME_STATE_PATH).read_text().strip()
+    except OSError:
+        saved = ""
+    desired = resolve_hostname(
+        system.findtext("hostname") or "",
+        bootstrap,
+        saved,
+        Path(CONFIG_BACKUP_DIR),
+    )
+    changes = []
+    if system.findtext("hostname") != desired:
+        ensure_child(system, "hostname", desired)
+        changes.append(f"hostname={desired}")
+    try:
+        Path(HOSTNAME_STATE_PATH).write_text(f"{desired}\n")
+    except OSError as exc:
+        print(f"WARNING: cannot persist hostname state: {exc}", file=sys.stderr)
+    return changes
 
 
 def ensure_child(parent: ET.Element, tag: str, text: str | None = None) -> ET.Element:
@@ -211,6 +283,7 @@ def emit_marker(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mgmt-if", default=DEFAULT_MGMT_IF)
+    parser.add_argument("--bootstrap-hostname", default="")
     parser.add_argument("--mgmt-ipv4", required=True)
     parser.add_argument("--mgmt-gw4")
     parser.add_argument("--dedicated-mgmt", action="store_true")
@@ -230,7 +303,7 @@ def main() -> int:
 
     tree = ET.parse(CONFIG_PATH)
     root = tree.getroot()
-    changes = []
+    changes = preserve_hostname(root, args.bootstrap_hostname)
 
     # 1. <system><webgui><nohttpreferercheck>1</nohttpreferercheck>
     webgui = root.find("./system/webgui")

@@ -156,6 +156,7 @@ class DNLabOpnsenseVM(vrnetlab.VM):
 
         args = [
             "python3 /tmp/dnlab-cd/patch_config.py",
+            f"--bootstrap-hostname {shlex.quote(self.hostname)}",
             f"--mgmt-if {shlex.quote(mgmt_if)}",
             f"--mgmt-ipv4 {shlex.quote(self.mgmt_address_ipv4)}",
             f"--marker {shlex.quote(unique)}",

@@ -3,9 +3,12 @@
 import datetime
 import logging
 import os
+import re
 import shlex
 import signal
+import stat
 import sys
+import tempfile
 
 import vrnetlab
 
@@ -35,6 +38,89 @@ logging.Logger.trace = trace
 
 CONFIG_SHARE = "/run/dnlab-frr"
 CONFIG_ENV = os.path.join(CONFIG_SHARE, "mgmt.env")
+DEFAULT_GUEST_HOSTNAME = "dnlab-frr"
+HOSTNAME_LINE_RE = re.compile(r"^(\s*hostname\s+)(\S+)(\s*)$")
+
+
+def _valid_hostname(value: str) -> bool:
+    if not value or len(value) > 253:
+        return False
+    labels = value.rstrip(".").split(".")
+    return all(
+        1 <= len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(char.isalnum() or char == "-" for char in label)
+        for label in labels
+    )
+
+
+def _write_frr_config_atomic(path: str, lines: list[str]) -> None:
+    existing_stat = os.stat(path) if os.path.exists(path) else None
+    fd, tmp_path = tempfile.mkstemp(prefix=".frr.conf.", dir=os.path.dirname(path))
+    try:
+        if existing_stat is not None:
+            os.fchmod(fd, stat.S_IMODE(existing_stat.st_mode))
+        else:
+            os.fchmod(fd, 0o640)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            f.writelines(lines)
+            f.flush()
+            os.fsync(f.fileno())
+        if existing_stat is not None:
+            os.chown(tmp_path, existing_stat.st_uid, existing_stat.st_gid)
+        os.replace(tmp_path, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _resolve_persistent_hostname(topology_hostname: str, frr_config: str) -> str:
+    fallback = topology_hostname if _valid_hostname(topology_hostname) else "frr"
+    try:
+        with open(frr_config) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+
+    configured_hostnames = []
+    hostname_indexes = []
+    for index, line in enumerate(lines):
+        match = HOSTNAME_LINE_RE.match(line.rstrip("\n"))
+        if match:
+            configured_hostnames.append(match.group(2))
+            hostname_indexes.append(index)
+
+    configured = configured_hostnames[-1] if configured_hostnames else ""
+    custom_configured = (
+        _valid_hostname(configured)
+        and configured not in {DEFAULT_GUEST_HOSTNAME, "frr"}
+    )
+    if custom_configured and len(hostname_indexes) == 1:
+        return configured
+
+    if custom_configured:
+        lines[hostname_indexes[0]] = f"hostname {configured}\n"
+        for duplicate_index in reversed(hostname_indexes[1:]):
+            del lines[duplicate_index]
+        desired = configured
+    elif lines:
+        for hostname_index in reversed(hostname_indexes):
+            del lines[hostname_index]
+        desired = fallback
+    else:
+        lines = [
+            "frr defaults traditional\n",
+            "service integrated-vtysh-config\n",
+            "!\n",
+            "line vty\n",
+        ]
+        desired = fallback
+    _write_frr_config_atomic(frr_config, lines)
+    return desired
 
 
 def _resolve_disk_image() -> str:
@@ -55,6 +141,19 @@ def _quote_env(value) -> str:
 
 class DNLabFRRVM(vrnetlab.VM):
     def __init__(self, hostname, username, password, nics, conn_mode):
+        persist_dir = "/persist" if os.path.isdir("/persist") else ""
+        if persist_dir:
+            frr_dir = os.path.join(persist_dir, "frr")
+            os.makedirs(frr_dir, exist_ok=True)
+            marker = os.path.join(persist_dir, ".dnlab-hostname-initialized")
+            if os.path.exists(marker):
+                os.unlink(marker)
+            guest_hostname = _resolve_persistent_hostname(
+                hostname,
+                os.path.join(frr_dir, "frr.conf"),
+            )
+        else:
+            guest_hostname = hostname if _valid_hostname(hostname) else "frr"
         disk_image = _resolve_disk_image()
         super().__init__(
             username,
@@ -65,7 +164,7 @@ class DNLabFRRVM(vrnetlab.VM):
             mgmt_passthrough=True,
         )
 
-        self.hostname = hostname
+        self.hostname = guest_hostname
         self.conn_mode = conn_mode
         self.nic_type = "virtio-net-pci"
         self.num_nics = nics
@@ -171,8 +270,13 @@ if __name__ == "__main__":
     if args.trace:
         logger.setLevel(1)
 
+    topology_hostname = (
+        os.environ.get("CLAB_LABEL_CLAB_NODE_NAME")
+        or os.environ.get("HOSTNAME")
+        or args.hostname
+    )
     vr = DNLabFRR(
-        args.hostname,
+        topology_hostname,
         args.username,
         args.password,
         args.nics,

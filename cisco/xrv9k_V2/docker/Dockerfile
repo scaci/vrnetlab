@@ -6,5 +6,5 @@ COPY OVMF.fd /
 COPY *.py /
 
 EXPOSE 22 80 443 161/udp 830 5000 10000-10099 57400
-HEALTHCHECK CMD ["/healthcheck.py"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30m --retries=3 CMD ["/healthcheck.py"]
 ENTRYPOINT ["/launch.py"]

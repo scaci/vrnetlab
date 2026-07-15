@@ -113,8 +113,21 @@ class XRv9k_vm(vrnetlab.VM):
         elif self.version_major == 24 and self.version_minor >= 4:
             use_ovmf = True
         # else: do not use OVMF/UEFI
+        # XR 24.4+ needs ttyS2 for the vrnetlab bootstrap watcher, but the
+        # interactive IOS XR console exposed to dNLab remains the first QEMU
+        # serial socket (5000). Keep the two roles separate: publishing 5002
+        # makes users land on the administrative/bootstrap console instead of
+        # the operational first-boot console.
         self.xr_console_port = 5002 + self.num if use_ovmf else 5000 + self.num
+        self.user_console_port = 5000 + self.num
         self.xr_console_active = False
+        # Publish the interactive console for dNLab console relays. The
+        # bootstrap watcher may use another serial port internally.
+        try:
+            with open("/run/dnlab-console-port", "w", encoding="ascii") as stream:
+                stream.write(str(self.user_console_port))
+        except OSError as exc:
+            self.logger.warning("Could not publish XR console port: %s", exc)
         if use_ovmf:
             # Remove the IDE disk that parent class added (both -drive flag and its value),
             # and extract the original qcow2 image path
