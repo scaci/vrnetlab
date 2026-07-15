@@ -35,3 +35,4 @@ cisco*.bin
 # ignore clab- dirs
 clab-*
 .codex
+/update-vrnetlab-fork.sh
